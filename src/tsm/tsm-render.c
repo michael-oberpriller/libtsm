@@ -115,9 +115,10 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 			was_sel = false;
 		}
 
-		for (j = 0; j < con->size_x; ++j) {
-			if (j < line->size)
-				cell = &line->cells[j];
+		//for (j = 0; j < con->size_x; ++j) {
+		for (j = con->size_x; j > 0; --j) {
+			if (j-1 < line->size)
+				cell = &line->cells[j-1];
 			else
 				cell = &empty;
 
@@ -179,7 +180,7 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 			if (cell->ch == 0 || (cell->ch == ' ' && !attr.underline))
 				len = 0;
 			ret = draw_cb(con, id, ch, len, cell->width,
-				      j, i, &attr, age, data);
+				      j-1, i, &attr, age, data);
 			if (ret && warned++ < 3) {
 				llog_debug(con,
 					   "cannot draw glyph at %ux%u via text-renderer",
