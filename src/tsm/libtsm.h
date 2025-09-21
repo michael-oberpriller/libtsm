@@ -181,6 +181,12 @@ typedef int (*tsm_screen_draw_cb) (struct tsm_screen *con,
 				   unsigned int posy,
 				   const struct tsm_screen_attr *attr,
 				   tsm_age_t age,
+				   bool overflow_next,
+				   void *data);
+
+typedef int (*tsm_screen_overflow_cb) (const uint32_t *ch,
+				   size_t len,
+				   bool *overflow_next,
 				   void *data);
 
 int tsm_screen_new(struct tsm_screen **out, tsm_log_t log, void *log_data);
@@ -263,7 +269,7 @@ void tsm_screen_selection_target(struct tsm_screen *con,
 int tsm_screen_selection_copy(struct tsm_screen *con, char **out);
 
 tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
-			  void *data);
+			  tsm_screen_overflow_cb overflow_cb, void *data);
 
 /** @} */
 

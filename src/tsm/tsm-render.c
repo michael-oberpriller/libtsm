@@ -43,7 +43,7 @@
 
 SHL_EXPORT
 tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
-			  void *data)
+			  tsm_screen_overflow_cb overflow_cb, void *data)
 {
 	unsigned int cur_x, cur_y;
 	unsigned int i, j, k;
@@ -57,6 +57,7 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 	bool in_sel = false, sel_start = false, sel_end = false;
 	bool was_sel = false;
 	tsm_age_t age;
+	bool overflow_next = false;
 
 	if (!con || !draw_cb)
 		return 0;
@@ -176,10 +177,18 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 				id |= 1ULL << (TSM_UCS4_MAX_BITS + 4);
 
 			ch = tsm_symbol_get(con->sym_table, &cell->ch, &len);
-			if (cell->ch == 0 || (cell->ch == ' ' && !attr.underline))
+			if (cell->ch == 0 || (cell->ch == ' ' && !attr.underline)) {
 				len = 0;
+				if (overflow_next) {
+					overflow_next = false;
+					continue;
+				}
+			} else {
+				ret = overflow_cb(ch, len, &overflow_next, data);
+			}
+
 			ret = draw_cb(con, id, ch, len, cell->width,
-				      j, i, &attr, age, data);
+				      j, i, &attr, age, overflow_next, data);
 			if (ret && warned++ < 3) {
 				llog_debug(con,
 					   "cannot draw glyph at %ux%u via text-renderer",
