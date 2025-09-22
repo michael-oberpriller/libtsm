@@ -358,7 +358,7 @@ static int create_glyph(struct gtktsm_face *face,
 {
 	PangoLayoutLine *line;
 	cairo_surface_t *surface;
-	PangoRectangle rec;
+	PangoRectangle rec, logical_rec;
 	cairo_format_t format;
 	PangoLayout *layout;
 	cairo_t *cr;
@@ -381,32 +381,6 @@ static int create_glyph(struct gtktsm_face *face,
 		break;
 	}
 
-	glyph->format = c2f(format);
-	glyph->width = face->width * glyph->cwidth;
-	glyph->stride = cairo_format_stride_for_width(format, glyph->width);
-	glyph->height = face->height;
-
-	glyph->buffer = calloc(1, glyph->stride * glyph->height);
-	if (!glyph->buffer)
-		return -ENOMEM;
-
-	surface = cairo_image_surface_create_for_data(glyph->buffer,
-						      format,
-						      glyph->width,
-						      glyph->height,
-						      glyph->stride);
-	if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
-		r = -ENOMEM;
-		goto err_buffer;
-	}
-
-	cr = cairo_create(surface);
-	if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
-		r = -ENOMEM;
-		goto err_surface;
-	}
-
-	pango_cairo_update_context(cr, face->ctx);
 	layout = pango_layout_new(face->ctx);
 
 	val = g_ucs4_to_utf8(ch, len, NULL, &ulen, NULL);
@@ -431,7 +405,34 @@ static int create_glyph(struct gtktsm_face *face,
 	}
 
 	line = pango_layout_get_line_readonly(layout, 0);
-	pango_layout_line_get_pixel_extents(line, NULL, &rec);
+	pango_layout_line_get_pixel_extents(line, &logical_rec, &rec);
+
+	glyph->format = c2f(format);
+	glyph->width = (logical_rec.width > face->width) ? face->width * 2 : face->width * glyph->cwidth;
+	glyph->stride = cairo_format_stride_for_width(format, glyph->width);
+	glyph->height = face->height;
+
+	glyph->buffer = calloc(1, glyph->stride * glyph->height);
+	if (!glyph->buffer)
+		return -ENOMEM;
+
+	surface = cairo_image_surface_create_for_data(glyph->buffer,
+						      format,
+						      glyph->width,
+						      glyph->height,
+						      glyph->stride);
+	if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+		r = -ENOMEM;
+		goto err_buffer;
+	}
+
+	cr = cairo_create(surface);
+	if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
+		r = -ENOMEM;
+		goto err_surface;
+	}
+
+	pango_cairo_update_context(cr, face->ctx);
 
 	cairo_move_to(cr, -rec.x, face->baseline),
 	cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
@@ -442,14 +443,14 @@ static int create_glyph(struct gtktsm_face *face,
 	glyph->surface = surface;
 	return 0;
 
-err_layout:
-	g_object_unref(layout);
-	cairo_destroy(cr);
 err_surface:
+	cairo_destroy(cr);
 	cairo_surface_destroy(surface);
 err_buffer:
 	free(glyph->buffer);
 	glyph->buffer = NULL;
+err_layout:
+	g_object_unref(layout);
 	return r;
 }
 
@@ -945,6 +946,7 @@ static int renderer_draw_cell(struct tsm_screen *screen,
 			      unsigned int posy,
 			      const struct tsm_screen_attr *attr,
 			      tsm_age_t age,
+				  bool overflow_next,
 			      void *data)
 {
 	const struct gtktsm_renderer_ctx *ctx = data;
@@ -1040,6 +1042,67 @@ static int renderer_draw_cell(struct tsm_screen *screen,
 	return 0;
 }
 
+static int gtktsm_get_overflow(struct gtktsm_renderer_ctx *ctx,
+			     const uint32_t *ch,
+				 size_t len,
+				 bool *overflow_next)
+{
+	PangoLayout *layout;
+	PangoAttrList *attrlist;
+	PangoRectangle rec, logical_rec;
+	PangoLayoutLine *line;
+	struct gtktsm_face *face = ctx->face_regular;
+	unsigned int cwidth;
+	size_t ulen, cnt;
+	char *val;
+
+	cwidth = tsm_ucs4_get_width(*ch);
+	if (!cwidth)
+		return -ERANGE;
+
+	layout = pango_layout_new(face->ctx);
+	attrlist = pango_layout_get_attributes(layout);
+	if (attrlist == NULL) {
+		attrlist = pango_attr_list_new();
+		pango_layout_set_attributes(layout, attrlist);
+		pango_attr_list_unref(attrlist);
+	}
+
+	/* render one line only */
+	pango_layout_set_height(layout, 0);
+
+	/* no line spacing */
+	pango_layout_set_spacing(layout, 0);
+
+	val = tsm_ucs4_to_utf8_alloc(ch, len, &ulen);
+	if (!val) {
+		return -ERANGE;
+	}
+	pango_layout_set_text(layout, val, ulen);
+	free(val);
+
+	cnt = pango_layout_get_line_count(layout);
+	if (cnt == 0) {
+		return -ERANGE;
+	}
+
+	line = pango_layout_get_line_readonly(layout, 0);
+
+	pango_layout_line_get_pixel_extents(line, &logical_rec, &rec);
+
+	*overflow_next = (cwidth < 2) && (logical_rec.width > face->width);
+
+	return 0;
+}
+
+static int renderer_get_overflow(const uint32_t *ch,
+				   size_t len,
+				   bool *overflow_next,
+				   void *data)
+{
+	return gtktsm_get_overflow(data, ch, len, overflow_next);
+}
+
 static void gtktsm_renderer_draw(const struct gtktsm_renderer_ctx *ctx)
 {
 	struct gtktsm_renderer *rend = ctx->rend;
@@ -1054,6 +1117,7 @@ static void gtktsm_renderer_draw(const struct gtktsm_renderer_ctx *ctx)
 	cairo_surface_flush(rend->surface);
 	rend->age = tsm_screen_draw(ctx->screen,
 				    renderer_draw_cell,
+					renderer_get_overflow,
 				    (void*)ctx);
 	cairo_surface_mark_dirty(rend->surface);
 
